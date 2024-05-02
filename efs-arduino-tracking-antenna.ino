@@ -1,16 +1,17 @@
-#include <SparkFun_u-blox_GNSS_Arduino_Library.h>
+#include <Adafruit_GPS.h>
 #include "c_library_v2/ardupilotmega/mavlink.h"
 #include <math.h>
 #include <Servo.h>
 #include <SoftwareSerial.h>
+#include <Adafruit_NeoPixel.h>
 
 #define PI 3.14159265358979323846
 #define EARTH_RADIUS 6372797.56085
 #define RADIANS PI / 180
 #define AAT_BEARING 270
 
-SoftwareSerial mySerial(2, 3); // RX, TX. Pin 10 on Uno goes to TX pin on GNSS module.
-SFE_UBLOX_GNSS myGNSS;
+SoftwareSerial GPSSerial(1, 0); // RX, TX. Pin 10 on Uno goes to TX pin on GNSS module.
+Adafruit_GPS GPS(&GPSSerial);
 
 Servo pitchL;
 Servo pitchR;
@@ -20,7 +21,6 @@ Servo yaw;
 float AAT_LAT = 43.473641;
 float AAT_LON = -85.540774;
 
-byte siv;
 float vehicle_lat;
 float vehicle_lon;
 float vehicle_alt;
@@ -33,6 +33,9 @@ double haversine;
 double temp;
 double point_dist;
 
+#define LEDPIN        10 // On Trinket or Gemma, suggest changing this to 1   
+Adafruit_NeoPixel pixels(1, LEDPIN, NEO_GRB + NEO_KHZ800);
+
 //PITCH 0 DEG (L, R): 1950, 1050
 //PITCH 90 DEG (L, R): 950, 2050
 //YAW 0 DEG: 1500
@@ -40,14 +43,31 @@ double point_dist;
 //YAW 85 DEG LEFT: 2400
 
 void set_starting_gps() {
-  //Query module only every second. Doing it more often will just cause I2C traffic.
-  //The module only responds when a new position is available
-  delay(1000);
+    uint32_t timer = millis();
+    uint8_t siv = 0;
 
-  AAT_LAT = myGNSS.getLatitude()/10000000.0;
-  AAT_LON = myGNSS.getLongitude()/10000000.0;
+    do {
+      char c = GPS.read();
+      if (GPS.newNMEAreceived()) {
+      Serial.println(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
+      if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
+        continue; // we can fail to parse a sentence in which case we should just wait for another
+      }
+
+      // approximately every 2 seconds or so, print out the current stats
+      if (millis() - timer > 2000){
+        timer = millis(); // reset the timer
+        siv = GPS.satellites;
+        Serial.println("Getting GPS, repeating...");
+        Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
+      }
+    
+    } while(siv < 6);
+
+  AAT_LAT = GPS.latitude_fixed /10000000.0;
+  AAT_LON = GPS.longitude_fixed /10000000.0;
   //AAT_ALT Not implemented assume 0
-  //  AAT_ALT = myGNSS.getAltitude()/100000;
+  //  AAT_ALT = GPS.altitude/100000;
   //  Serial.print(F("ALT: "));
   //  Serial.print(AAT_ALT);
 }
@@ -60,8 +80,8 @@ void setPitchAngle(float angle) {
   int microsecondsL;
   int microsecondsR;
   microsecondsR = map(angle, 0, 90, 1050, 2050);
-  microsecondsL = (-1 * microsecondsR) + 3000;
-  pitchL.writeMicroseconds(microsecondsL);
+  //microsecondsL = (-1 * microsecondsR) + 3000;
+  //pitchL.writeMicroseconds(microsecondsL);
   pitchR.writeMicroseconds(microsecondsR);
 }
 
@@ -80,19 +100,22 @@ void setup() {
   // Start serial interfaces
   Serial.begin(115200); // USB for serial monitor
   while (!Serial); //Wait for user to open terminal
+  pixels.begin();
+  pixels.setPixelColor(0, pixels.Color(221,160,221));
+
+  pixels.show();   // Send the updated pixel colors to the hardware.
+
   Serial1.begin(57600);  // UART for MAVLink
   do {
-    Serial.println("GNSS: trying 9600 baud");
-    mySerial.begin(9600);
-    if (myGNSS.begin(mySerial) == true) break;
-
     delay(100);
     Serial.println("GNSS: trying 9600 baud");
-    mySerial.begin(9600);
-    if (myGNSS.begin(mySerial) == true) {
+    GPSSerial.begin(9600);
+    if (GPS.begin(9600) == true) {
+        GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
+        GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
         Serial.println("GNSS: connected at 9600 baud");
-        myGNSS.setSerialRate(9600);
         delay(100);
+        break;
     } else {
         //myGNSS.factoryReset();
         delay(2000); //Wait a bit before trying again to limit the Serial output
@@ -100,21 +123,12 @@ void setup() {
   } while(1);
   Serial.println("GNSS serial connected");
 
-  myGNSS.setUART1Output(COM_TYPE_UBX); //Set the UART port to output UBX only
-  myGNSS.setI2COutput(COM_TYPE_UBX); //Set the I2C port to output UBX only (turn off NMEA noise)
-  myGNSS.saveConfiguration(); //Save the current settings to flash and BBR;
-
-  do {
-    siv = myGNSS.getSIV();
-    Serial.println("Getting GPS, repeating...");
-  } while(siv < 6);
-
   set_starting_gps();
 
    // Set servo pins
-  pitchL.attach(10); // Left pitch servo
-  pitchR.attach(9); // Right pitch servo
-  yaw.attach(8); // Yaw servo
+  //pitchL.attach(2); // Left pitch servo
+  pitchR.attach(2); // Right pitch servo
+  yaw.attach(3); // Yaw servo
 
   // Set initial angles
   setYawAngle(0);
