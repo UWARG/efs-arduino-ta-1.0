@@ -1,111 +1,82 @@
-#include <Adafruit_GPS.h>
 #include "c_library_v2/ardupilotmega/mavlink.h"
 #include <math.h>
 #include <Servo.h>
 #include <SoftwareSerial.h>
+#include <Adafruit_GPS.h>
 #include <Adafruit_NeoPixel.h>
+#include <Adafruit_TinyUSB.h>
+#include <DFRobot_BMX160.h>
 
-#define PI 3.14159265358979323846
-#define EARTH_RADIUS 6372797.56085
-#define RADIANS PI / 180
-#define AAT_BEARING 270
+//TX and RX refer to controller side
+#define GPS_TX 0
+#define GPS_RX 1
+#define PITCH_PWM A2
+#define YAW_PWM A3
+#define LED_PIN D10
 
-SoftwareSerial GPSSerial(1, 0); // RX, TX. Pin 10 on Uno goes to TX pin on GNSS module.
-Adafruit_GPS GPS(&GPSSerial);
-
-Servo pitchL;
-Servo pitchR;
+Servo pitch;
 Servo yaw;
 
-//SET INITIAL ANTENNA TRACKER LOCATION AND BEARING
-float AAT_LAT = 43.473641;
-float AAT_LON = -85.540774;
+#define EARTH_RADIUS 6372797.56085
+#define RADIANS PI / 180
+#define NUMPIXELS 1
+#define AAT_BEARING 0
 
 float vehicle_lat;
 float vehicle_lon;
 float vehicle_alt;
 float dist;
 float bear;
+float AAT_LAT = -35.3627269690005;
+float AAT_LON = 149.1653676133993;
 int inc = 0;
 mavlink_message_t msg;
 mavlink_status_t status;
 double haversine;
 double temp;
 double point_dist;
+int y_north_microseconds;
 
-#define LEDPIN        10 // On Trinket or Gemma, suggest changing this to 1   
-Adafruit_NeoPixel pixels(1, LEDPIN, NEO_GRB + NEO_KHZ800);
+// For North calibration
+int startPos_y = 550; // Starting position in microseconds
+int endPos_y = 2450; // Ending position in microseconds
+int stepSize = 1; // Step size in microseconds
+int stepDelay = 50; // Delay between steps in milliseconds
 
-//PITCH 0 DEG (L, R): 1950, 1050
-//PITCH 90 DEG (L, R): 950, 2050
-//YAW 0 DEG: 1500
-//YAW 85 DEG RIGHT: 600
-//YAW 85 DEG LEFT: 2400
-
-void set_starting_gps() {
-    uint32_t timer = millis();
-    uint8_t siv = 0;
-
-    do {
-      char c = GPS.read();
-      if (GPS.newNMEAreceived()) {
-      Serial.println(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
-      if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
-        continue; // we can fail to parse a sentence in which case we should just wait for another
-      }
-
-      // approximately every 2 seconds or so, print out the current stats
-      if (millis() - timer > 2000){
-        timer = millis(); // reset the timer
-        siv = GPS.satellites;
-        Serial.println("Getting GPS, repeating...");
-        Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
-      }
-    
-    } while(siv < 6);
-
-  AAT_LAT = GPS.latitude_fixed /10000000.0;
-  AAT_LON = GPS.longitude_fixed /10000000.0;
-  //AAT_ALT Not implemented assume 0
-  //  AAT_ALT = GPS.altitude/100000;
-  //  Serial.print(F("ALT: "));
-  //  Serial.print(AAT_ALT);
-}
+Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+DFRobot_BMX160 bmx160;
 
 // Function to set the pitch angle of the tracker in degrees
 void setPitchAngle(float angle) {
   if (angle > 90 || angle < 0) {
     return;
   }
-  int microsecondsL;
-  int microsecondsR;
-  microsecondsR = map(angle, 0, 90, 1050, 2050);
-  //microsecondsL = (-1 * microsecondsR) + 3000;
-  //pitchL.writeMicroseconds(microsecondsL);
-  pitchR.writeMicroseconds(microsecondsR);
+  int p_microseconds;
+  p_microseconds = map(angle, 0, 90, 575, 2300);
+  pitch.writeMicroseconds(p_microseconds);
 }
 
 // Function to set the yaw angle of the tracker in degrees
 void setYawAngle(float angle) {
-  if (angle > 85 || angle < -85) {
+  if (angle > 175 || angle < -175) {
     return;
   }
-  int microsecondsY;
-  microsecondsY = map(angle, -85, 85, 2400, 600);
-  yaw.writeMicroseconds(microsecondsY);
+  int y_microseconds;
+  int y_offset_microseconds;
+  y_microseconds = map(angle, -175, 175, 2450, 550);
+  Serial.print("Yaw Microseconds (no offset): ");
+  Serial.println(y_microseconds);
+  y_offset_microseconds = 1500 - y_north_microseconds;
+  yaw.writeMicroseconds(y_microseconds - y_offset_microseconds);
+  Serial.print("Yaw Microseconds (with offset): ");
+  Serial.println(y_offset_microseconds);
 }
 
-void setup() {
-
-  // Start serial interfaces
-  Serial.begin(115200); // USB for serial monitor
-  while (!Serial); //Wait for user to open terminal
-  pixels.begin();
-  pixels.setPixelColor(0, pixels.Color(221,160,221));
-
-  pixels.show();   // Send the updated pixel colors to the hardware.
-
-  Serial1.begin(57600);  // UART for MAVLink
+bool getGPSLocation() {
+  uint8_t sats = 0;
+  Serial.println("Waiting for GPS fix...");
+  SoftwareSerial GPSSerial (GPS_RX, GPS_TX);
+  Adafruit_GPS GPS(&GPSSerial);
   do {
     delay(100);
     Serial.println("GNSS: trying 9600 baud");
@@ -113,6 +84,7 @@ void setup() {
     if (GPS.begin(9600) == true) {
         GPS.sendCommand(PMTK_SET_NMEA_OUTPUT_RMCGGA);
         GPS.sendCommand(PMTK_SET_NMEA_UPDATE_1HZ);
+        GPS.sendCommand(PGCMD_ANTENNA);
         Serial.println("GNSS: connected at 9600 baud");
         delay(100);
         break;
@@ -121,26 +93,31 @@ void setup() {
         delay(2000); //Wait a bit before trying again to limit the Serial output
     }
   } while(1);
-  Serial.println("GNSS serial connected");
 
-  set_starting_gps();
+  uint32_t timer = millis();
 
-   // Set servo pins
-  //pitchL.attach(2); // Left pitch servo
-  pitchR.attach(2); // Right pitch servo
-  yaw.attach(3); // Yaw servo
+  do {
+    char c = GPS.read();
+    if (GPS.newNMEAreceived()) {
+    Serial.println(GPS.lastNMEA()); // this also sets the newNMEAreceived() flag to false
+    if (!GPS.parse(GPS.lastNMEA())) // this also sets the newNMEAreceived() flag to false
+      continue; // we can fail to parse a sentence in which case we should just wait for another
+    }
 
-  // Set initial angles
-  setYawAngle(0);
-  setPitchAngle(45);
-}
+    // approximately every 2 seconds or so, print out the current stats
+    if (millis() - timer > 2000){
+      timer = millis(); // reset the timer
+      sats = GPS.satellites;
+      Serial.println("Getting GPS, repeating...");
+      Serial.print("Satellites: "); Serial.println((int)GPS.satellites);
+    }
+  
+  } while(sats < 7);
 
-double toRadians(double degrees) {
-  return degrees * (RADIANS);
-}
+  AAT_LAT = GPS.latitude_fixed /10000000.0;
+  AAT_LON = GPS.longitude_fixed /10000000.0;
 
-double toDegrees(double radians) {
-  return radians * (pow(RADIANS, -1));
+  return true;
 }
 
 void readPos() {
@@ -163,6 +140,14 @@ void readPos() {
       }
     }
   }
+}
+
+double toRadians(double degrees) {
+  return degrees * (RADIANS);
+}
+
+double toDegrees(double radians) {
+  return radians * (pow(RADIANS, -1));
 }
 
 //https://stackoverflow.com/questions/27126714/c-latitude-and-longitude-distance-calculator
@@ -260,32 +245,75 @@ int yawAngleCalc(int bearing) {
   return rawDifference;
 }
 
+void setup() {
+  pinMode(LED_GREEN, OUTPUT);
+  digitalWrite(LED_GREEN, LOW);
+
+  pixels.begin(); 
+  pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+  pixels.show();
+
+  if (bmx160.begin() != true){
+    Serial.println("init false");
+    while(1);
+  }
+
+  // Start serial interface
+  Serial.begin(9600); // USB for serial monitor
+  while(!Serial);
+  Serial1.begin(57600);  // UART for MAVLink
+
+  //show red 
+  pixels.setPixelColor(0, pixels.Color(255, 0, 0));
+  pixels.show();
+
+  //Set AAT_LAT and AAT_LON from GPS
+  getGPSLocation();
+
+  // Set servo pins
+  pitch.attach(PITCH_PWM); // Pitch servo
+  yaw.attach(YAW_PWM); // Yaw servo
+
+  // Set initial angles for pitch and yaw
+  setPitchAngle(0);
+  yaw.writeMicroseconds(startPos_y);
+  delay(10000);
+
+  //  Calibrate north
+  for (int i = startPos_y; i <= endPos_y; i += stepSize) {
+    sBmx160SensorData_t Omagn, Ogyro, Oaccel;
+    bmx160.getAllData(&Omagn, &Ogyro, &Oaccel);
+    Serial.print("M ");
+    Serial.print("X: "); Serial.print(Omagn.x); Serial.print("  ");
+    Serial.print("Y: "); Serial.print(Omagn.y); Serial.print("  ");
+    Serial.print("Z: "); Serial.print(Omagn.z); Serial.print("  ");
+    Serial.println("uT");
+    if (Omagn.x < -95 && Omagn.x > -100) {
+      pixels.setPixelColor(0, pixels.Color(0, 255, 0));
+      pixels.show();
+      Serial.println(i);
+      y_north_microseconds = i;
+      delay(5000);
+      break;
+    }
+    yaw.writeMicroseconds(i);
+    delay(stepDelay);
+  }
+}
+
 void loop() {
+  // put your main code here, to run repeatedly:
   readPos();
+  Serial.println(vehicle_alt);
   dist = calcGPSDist(AAT_LAT, AAT_LON, vehicle_lat, vehicle_lon);
   bear = calculateBearing(AAT_LAT, AAT_LON, vehicle_lat, vehicle_lon);
   setPitchAngle(pitchAngleCalc(dist, vehicle_alt));
   setYawAngle(yawAngleCalc(bear));
-  Serial.print("Latitude: ");
-  Serial.println(vehicle_lat, 6);
-  Serial.print("Longitude: ");
-  Serial.println(vehicle_lon, 6);
-  Serial.print("Altitude: ");
-  Serial.println(vehicle_alt, 2);
-  Serial.print("Dist: ");
-  Serial.println(dist, 2);
+  inc = inc+1;
   Serial.print("Bearing: ");
   Serial.println(bear, 2);
-  Serial.print("AAT Pitch: ");
-  Serial.println(pitchAngleCalc(dist, vehicle_alt));
   Serial.print("AAT Yaw: ");
   Serial.println(yawAngleCalc(bear));
-  Serial.print("Incremental: ");
-  Serial.println(inc);
-  inc = inc+1;
-  Serial.print(F("Lat: "));
-  Serial.println(AAT_LAT);
-  Serial.print(F("Lon: "));
-  Serial.println(AAT_LON);
   delay(100);
+
 }
