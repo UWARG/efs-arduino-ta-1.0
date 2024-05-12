@@ -67,7 +67,7 @@ void setYawAngle(float angle) {
   Serial.print("Yaw Microseconds (no offset): ");
   Serial.println(y_microseconds);
   y_offset_microseconds = 1500 - y_north_microseconds;
-  yaw.writeMicroseconds(y_microseconds - y_offset_microseconds);
+  yaw.writeMicroseconds(y_microseconds);
   Serial.print("Yaw Microseconds (with offset): ");
   Serial.println(y_offset_microseconds);
 }
@@ -280,25 +280,28 @@ void setup() {
   delay(10000);
 
   //  Calibrate north
-  for (int i = startPos_y; i <= endPos_y; i += stepSize) {
-    sBmx160SensorData_t Omagn, Ogyro, Oaccel;
-    bmx160.getAllData(&Omagn, &Ogyro, &Oaccel);
-    Serial.print("M ");
-    Serial.print("X: "); Serial.print(Omagn.x); Serial.print("  ");
-    Serial.print("Y: "); Serial.print(Omagn.y); Serial.print("  ");
-    Serial.print("Z: "); Serial.print(Omagn.z); Serial.print("  ");
-    Serial.println("uT");
-    if (Omagn.x < -95 && Omagn.x > -100) {
-      pixels.setPixelColor(0, pixels.Color(0, 255, 0));
-      pixels.show();
-      Serial.println(i);
-      y_north_microseconds = i;
-      delay(5000);
-      break;
-    }
-    yaw.writeMicroseconds(i);
-    delay(stepDelay);
-  }
+  // for (int i = startPos_y; i <= endPos_y; i += stepSize) {
+  //   sBmx160SensorData_t Omagn, Ogyro, Oaccel;
+  //   bmx160.getAllData(&Omagn, &Ogyro, &Oaccel);
+  //   Serial.print("M ");
+  //   Serial.print("X: "); Serial.print(Omagn.x); Serial.print("  ");
+  //   Serial.print("Y: "); Serial.print(Omagn.y); Serial.print("  ");
+  //   Serial.print("Z: "); Serial.print(Omagn.z); Serial.print("  ");
+  //   Serial.println("uT");
+  //   if (Omagn.x < -95 && Omagn.x > -100) {
+  //     pixels.setPixelColor(0, pixels.Color(0, 255, 0));
+  //     pixels.show();
+  //     Serial.println(i);
+  //     y_north_microseconds = i;
+  //     delay(5000);
+  //     break;
+  //   }
+  //   yaw.writeMicroseconds(i);
+  //   delay(stepDelay);
+  // }
+
+  yaw.writeMicroseconds(1500);
+  delay(10000);
 }
 
 void loop() {
