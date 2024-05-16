@@ -67,9 +67,7 @@ void setYawAngle(float angle) {
   Serial.print("Yaw Microseconds (no offset): ");
   Serial.println(y_microseconds);
   y_offset_microseconds = 1500 - y_north_microseconds;
-
-  yaw.writeMicroseconds(y_microseconds);
-  
+  yaw.writeMicroseconds(y_microseconds - y_offset_microseconds);
   Serial.print("Yaw Microseconds (with offset): ");
   Serial.println(y_offset_microseconds);
 }
@@ -123,9 +121,8 @@ bool getGPSLocation() {
 }
 
 void readPos() {
-
-  while (Serial1.available() > 0) {
-    uint8_t c = Serial1.read();
+  while (Serial.available() > 0) {
+    uint8_t c = Serial.read();
 
     if (mavlink_parse_char(MAVLINK_COMM_0, c, &msg, &status)) {
       switch(msg.msgid) {
@@ -263,7 +260,6 @@ void setup() {
   // Start serial interface
   Serial.begin(9600); // USB for serial monitor
   while(!Serial);
-  Serial1.begin(57600);  // UART for MAVLink
 
   //show red 
   pixels.setPixelColor(0, pixels.Color(255, 0, 0));
@@ -278,9 +274,50 @@ void setup() {
 
   // Set initial angles for pitch and yaw
   setPitchAngle(0);
-  yaw.writeMicroseconds(startPos_y);
-  delay(10000);
 
+  Serial.println("setting yaw to start pos");
+  yaw.writeMicroseconds((startPos_y+endPos_y)/2);
+  delay(10000);
+  Serial.println("done setting yaw to start pos");
+  Serial.println("use 'a' and 'd' to set north, and hit the space key when done");
+
+  // Calibrate North
+  char incomingChar = 0;
+  int yCalibPos = (startPos_y+endPos_y)/2;
+  bool done = false;
+  Serial.println(yCalibPos);
+  while (!done) {
+    if (Serial.available() > 0) {
+      // read the incoming char:
+      incomingChar = Serial.read();
+      delay(stepDelay);
+      switch (incomingChar) {
+        case 'a':
+          if (yCalibPos + 10 <= endPos_y) {
+            yCalibPos+= 10;
+          }
+          break;
+        case 'd':
+          if (yCalibPos - 10 >= startPos_y) {
+            yCalibPos-= 10;
+          }
+          break;
+        case ' ':
+          y_north_microseconds = yCalibPos;
+          done = true;
+          break;
+        default:
+          break;
+      }
+      Serial.println(yCalibPos);
+      yaw.writeMicroseconds(yCalibPos);
+    }
+  }
+
+  Serial.end();
+  Serial.begin(57600);  // UART for MAVLink
+  while(!Serial);
+  
   //  Calibrate north
 
   // for (int i = startPos_y; i <= endPos_y; i += stepSize) {
@@ -303,9 +340,8 @@ void setup() {
   //   delay(stepDelay);
   // }
 
-  yaw.writeMicroseconds(1500);
-  delay(10000);
-
+//  yaw.writeMicroseconds(1500);
+//  delay(10000);
 }
 
 void loop() {
