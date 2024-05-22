@@ -38,8 +38,8 @@ double point_dist;
 int y_north_microseconds;
 
 // For North calibration
-int startPos_y = 550; // Starting position in microseconds
-int endPos_y = 2450; // Ending position in microseconds
+int startPos_y = 740; // Starting position in microseconds
+int endPos_y = 2260; // Ending position in microseconds
 int stepSize = 1; // Step size in microseconds
 int stepDelay = 50; // Delay between steps in milliseconds
 
@@ -58,18 +58,21 @@ void setPitchAngle(float angle) {
 
 // Function to set the yaw angle of the tracker in degrees
 void setYawAngle(float angle) {
-  if (angle > 175 || angle < -175) {
-    return;
-  }
   int y_microseconds;
   int y_offset_microseconds;
-  y_microseconds = map(angle, -175, 175, 2450, 550);
+  
+  y_microseconds = map(angle, -175, 175, 2260, 740);
+  y_offset_microseconds = 1500 - y_north_microseconds;
+  if ((y_microseconds - y_offset_microseconds) > endPos_y || (y_microseconds - y_offset_microseconds) < startPos_y) {
+    return;
+  }
+  yaw.writeMicroseconds(y_microseconds - y_offset_microseconds);
+  
   Serial.print("Yaw Microseconds (no offset): ");
   Serial.println(y_microseconds);
-  y_offset_microseconds = 1500 - y_north_microseconds;
-  yaw.writeMicroseconds(y_microseconds - y_offset_microseconds);
+  
   Serial.print("Yaw Microseconds (with offset): ");
-  Serial.println(y_offset_microseconds);
+  Serial.println(y_microseconds - y_offset_microseconds);
 }
 
 bool getGPSLocation() {
@@ -315,6 +318,7 @@ void setup() {
   }
 
   Serial.end();
+  delay(1000);
   Serial.begin(57600);  // UART for MAVLink
   while(!Serial);
   
